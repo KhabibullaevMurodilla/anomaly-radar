@@ -1,0 +1,708 @@
+<meta charset="utf-8">
+<title>OT Anomaly Radar</title>
+<style>
+  /* HMI-console layout: dark-first (modeled on a SCADA operator screen),
+     drop zone up top as the actual point of the page, real case study
+     below it as proof this isn't a toy. */
+  :root{
+    --bg:#0b0f12; --panel:#11171b; --panel-2:#161d22; --line:#223038;
+    --fg:#d9e4e8; --fg-dim:#7d939c; --fg-faint:#4c6169;
+    --accent:#ffb224; --accent-dim:#8a6520;
+    --ok:#3ddc84; --warn:#ffb224; --crit:#ff5d5d;
+    --mono:'IBM Plex Mono', ui-monospace, Menlo, Consolas, monospace;
+    --sans:'IBM Plex Sans', -apple-system, Segoe UI, sans-serif;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#eef1f0; --panel:#ffffff; --panel-2:#f4f6f5; --line:#d7dedb;
+      --fg:#1c2a2e; --fg-dim:#5c6e73; --fg-faint:#8a9a9e;
+      --accent:#b5790a; --accent-dim:#e3c48c;
+      --ok:#1f8a53; --warn:#b5790a; --crit:#c4362f;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#eef1f0; --panel:#ffffff; --panel-2:#f4f6f5; --line:#d7dedb;
+    --fg:#1c2a2e; --fg-dim:#5c6e73; --fg-faint:#8a9a9e;
+    --accent:#b5790a; --accent-dim:#e3c48c;
+    --ok:#1f8a53; --warn:#b5790a; --crit:#c4362f;
+    color-scheme: light;
+  }
+
+  *{box-sizing:border-box}
+  body{background:var(--bg); color:var(--fg); font-family:var(--sans); margin:0; padding-inline:16px;}
+  ::selection{background:var(--accent); color:#000}
+
+  .wrap{max-width:1180px; margin:0 auto; padding-block:20px 48px;}
+
+  header{display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap; border-bottom:1px solid var(--line); padding-bottom:14px; margin-bottom:20px;}
+  .brand{display:flex; align-items:baseline; gap:10px;}
+  .brand .mark{font-family:var(--mono); font-size:11px; letter-spacing:.14em; color:var(--bg); background:var(--accent); padding:3px 7px; border-radius:3px; font-weight:700;}
+  h1{font-family:var(--sans); font-size:20px; font-weight:650; margin:0; letter-spacing:-0.01em;}
+  .tagline{color:var(--fg-dim); font-size:13px; max-width:50ch;}
+
+  /* drop zone */
+  .dropzone{
+    display:block; /* it's a <label>, which defaults to inline — without this
+      the border/background/padding only wrap the first line fragment and
+      the heading/paragraph spill outside it as an anonymous block */
+    border:1.5px dashed var(--line); border-radius:12px; background:var(--panel);
+    padding:28px 20px; text-align:center; cursor:pointer; margin-bottom:22px;
+    transition:border-color .15s, background .15s;
+  }
+  .dropzone:hover, .dropzone.drag{ border-color:var(--accent); background:var(--panel-2); }
+  .dropzone .icon{font-family:var(--mono); font-size:22px; color:var(--accent); margin-bottom:8px;}
+  .dropzone h2{font-size:15px; margin:0 0 4px; font-weight:650;}
+  .dropzone p{color:var(--fg-dim); font-size:12.5px; margin:0;}
+  .dropzone input{display:none;}
+  .dropzone .privacy{font-size:11px; color:var(--fg-faint); margin-top:10px;}
+
+  .status-line{display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:12.5px; color:var(--fg-dim); margin-bottom:16px;}
+  .spinner{width:12px; height:12px; border-radius:50%; border:2px solid var(--line); border-top-color:var(--accent); animation:spin .7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+
+  .section-label{font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-dim); font-weight:600; margin:28px 0 12px;}
+  .section-label:first-of-type{margin-top:0;}
+
+  .stats{display:grid; grid-template-columns:repeat(auto-fit, minmax(118px,1fr)); gap:1px; background:var(--line); border:1px solid var(--line); border-radius:8px; overflow:hidden; margin-bottom:18px;}
+  .stat{background:var(--panel); padding:12px 14px;}
+  .stat .n{font-family:var(--mono); font-variant-numeric:tabular-nums; font-size:22px; font-weight:600; line-height:1.1;}
+  .stat .l{color:var(--fg-dim); font-size:11px; text-transform:uppercase; letter-spacing:.08em; margin-top:3px;}
+  .stat.ok .n{color:var(--ok)} .stat.crit .n{color:var(--crit)} .stat.warn .n{color:var(--warn)}
+
+  .panel{background:var(--panel); border:1px solid var(--line); border-radius:10px;}
+
+  .radar-panel{padding:14px 16px 16px; margin-bottom:16px;}
+  .radar-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; flex-wrap:wrap; gap:8px;}
+  .radar-head h2{font-size:13px; margin:0; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-dim); font-weight:600;}
+  .legend{display:flex; gap:14px; font-size:11px; color:var(--fg-dim); flex-wrap:wrap;}
+  .legend span{display:inline-flex; align-items:center; gap:5px;}
+  .dot{width:8px; height:8px; border-radius:50%; display:inline-block;}
+
+  #radar{display:block; width:100%; height:280px; cursor:crosshair; touch-action:none;}
+
+  table.sessions{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px;}
+  table.sessions th{text-align:left; font-weight:600; color:var(--fg-dim); text-transform:uppercase; font-size:10.5px; letter-spacing:.06em; padding:8px 10px; border-bottom:1px solid var(--line);}
+  table.sessions td{padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap;}
+  table.sessions tr:last-child td{border-bottom:none;}
+  table.sessions tr.flagged{background:color-mix(in srgb, var(--crit) 7%, transparent);}
+  table.sessions .verdict-flagged{color:var(--crit); font-weight:600;}
+  table.sessions .verdict-ok{color:var(--fg-dim);}
+  .table-wrap{overflow-x:auto;}
+
+  .inspector{padding:14px 16px; min-height:160px; margin-bottom:16px;}
+  .inspector h2{font-size:13px; margin:0 0 10px; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-dim); font-weight:600;}
+  .field{display:flex; justify-content:space-between; gap:12px; padding:6px 0; border-bottom:1px solid var(--line); font-family:var(--mono); font-size:12.5px;}
+  .field:last-child{border-bottom:none;}
+  .field .k{color:var(--fg-dim);} .field .v{color:var(--fg); text-align:right;}
+  .badge{display:inline-block; font-family:var(--mono); font-size:10.5px; padding:2px 7px; border-radius:4px; letter-spacing:.03em;}
+  .badge.crit{background:color-mix(in srgb, var(--crit) 20%, transparent); color:var(--crit);}
+  .badge.ok{background:color-mix(in srgb, var(--ok) 18%, transparent); color:var(--ok);}
+  .empty-hint{color:var(--fg-faint); font-size:12.5px; line-height:1.6;}
+  .error-box{color:var(--crit); font-size:12.5px; padding:12px 14px; background:color-mix(in srgb, var(--crit) 10%, transparent); border-radius:8px; border:1px solid color-mix(in srgb, var(--crit) 30%, var(--line));}
+
+  .how{padding:14px 16px; margin-bottom:16px;}
+  .how h2{font-size:13px; margin:0 0 12px; text-transform:uppercase; letter-spacing:.08em; color:var(--fg-dim); font-weight:600;}
+  .stages{display:flex; flex-direction:column; gap:0;}
+  .stage{display:flex; gap:10px; align-items:flex-start; padding:9px 0;}
+  .stage:not(:last-child){border-bottom:1px dashed var(--line);}
+  .stage .idx{font-family:var(--mono); font-size:11px; color:var(--bg); background:var(--fg-faint); border-radius:50%; width:18px; height:18px; display:flex; align-items:center; justify-content:center; flex:none; margin-top:1px;}
+  .stage .txt{font-size:12.5px; line-height:1.5;}
+  .stage .txt b{color:var(--fg); font-weight:600;} .stage .txt span{color:var(--fg-dim);}
+
+  .case-study-banner{display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; padding:11px 14px; background:var(--panel-2); border:1px solid var(--line); border-radius:8px; margin-bottom:14px; font-size:12.5px;}
+  .case-study-banner b{color:var(--fg);}
+  .case-study-banner button{font-family:var(--sans); font-size:12px; font-weight:600; padding:6px 12px; border-radius:6px; border:1px solid var(--line); background:var(--panel); color:var(--fg-dim); cursor:pointer;}
+  .case-study-banner button:hover{color:var(--fg); border-color:var(--accent);}
+
+  footer{margin-top:24px; font-size:11.5px; color:var(--fg-faint); line-height:1.7; border-top:1px solid var(--line); padding-top:14px;}
+  footer a{color:var(--fg-dim);}
+  code{font-family:var(--mono); background:var(--panel-2); padding:1px 5px; border-radius:3px; font-size:0.93em; border:1px solid var(--line);}
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;650&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="mark">OT</span>
+      <div>
+        <h1>Anomaly Radar</h1>
+        <div class="tagline">Drop in a Modbus/TCP or S7comm capture and see which sessions look like an attack — scored against their own peers, entirely in your browser.</div>
+      </div>
+    </div>
+  </header>
+
+  <label class="dropzone" id="dropzone" for="file-input">
+    <div class="icon">⇧</div>
+    <h2>Drop a .pcap or .pcapng file, or click to choose one</h2>
+    <p>Modbus/TCP (port 502) or Siemens S7comm (port 102) traffic — any capture from Wireshark, tcpdump, or similar.</p>
+    <div class="privacy">Parsed entirely in your browser. Nothing is uploaded anywhere.</div>
+    <input type="file" id="file-input" accept=".pcap,.pcapng,.cap">
+  </label>
+
+  <div class="status-line" id="status" hidden></div>
+  <div id="error" hidden></div>
+
+  <div id="results" hidden>
+    <div class="section-label">Your capture</div>
+    <div class="stats" id="stats"></div>
+
+    <div class="panel radar-panel">
+      <div class="radar-head">
+        <h2 id="radar-title">Session timeline</h2>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--fg-faint)"></i> normal session</span>
+          <span><i class="dot" style="background:var(--crit); box-shadow:0 0 0 2px var(--crit)"></i> flagged — outlier vs. its peers</span>
+        </div>
+      </div>
+      <canvas id="radar"></canvas>
+    </div>
+
+    <div class="panel inspector" id="inspector">
+      <h2>Session detail</h2>
+      <div class="empty-hint">Click a lane above, or a row below, to inspect that session's stats.</div>
+    </div>
+
+    <div class="panel">
+      <div class="table-wrap">
+        <table class="sessions" id="session-table"></table>
+      </div>
+    </div>
+  </div>
+
+  <div class="section-label">Worked example</div>
+  <div class="case-study-banner">
+    <span>This page is pre-loaded with a <b>real reconnaissance scan</b> captured at a security conference — swap it out any time by dropping your own file above.</span>
+    <button id="reload-example">Reload example</button>
+  </div>
+
+  <div class="panel how">
+    <h2>What "flagged" means here</h2>
+    <div class="stages">
+      <div class="stage"><div class="idx">1</div><div class="txt"><b>Parse</b> <span>— real wire format for both protocols: Modbus/TCP's MBAP header + function-specific PDU, and Siemens S7comm's TPKT/COTP/S7 framing, request↔response matched by TCP connection order (not a transaction/reference ID — real devices often never increment it).</span></div></div>
+      <div class="stage"><div class="idx">2</div><div class="txt"><b>Group into sessions</b> <span>— one row per (protocol, client, server, unit) conversation: request rate, exception rate, how many distinct function codes it used, how many of those aren't standard for that protocol.</span></div></div>
+      <div class="stage"><div class="idx">3</div><div class="txt"><b>Compare to peers</b> <span>— each session is scored against the OTHER sessions talking to the same device over the same protocol, not against a fixed threshold. A session flagged here is a statistical outlier among its own peer group.</span></div></div>
+    </div>
+  </div>
+
+  <footer>
+    This in-browser tool runs the population-relative session detector — the one built after testing against this exact real capture showed a per-transaction model structurally misses an attacker who's anomalous from their first packet. The full project (parser, both detectors, test suite) is on <a href="https://github.com" target="_blank" rel="noopener">GitHub</a>.
+  </footer>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  const STANDARD_FUNCTION_CODES = {
+    modbus: new Set([1,2,3,4,5,6,7,8,11,12,15,16,17,20,21,22,23,24,43]),
+    s7comm: new Set([0x04,0x05,0xF0,0x1A,0x1B,0x1C,0x1D,0x1E,0x1F,0x28,0x29]),
+  };
+  const Z_THRESHOLD = 2.5;
+  const MODBUS_PORT = 502;
+  const S7COMM_PORT = 102;
+  const ROSCTR_JOB = 1, ROSCTR_ACK = 2, ROSCTR_ACK_DATA = 3, ROSCTR_USERDATA = 7;
+
+  // ---------- pcap + Ethernet/IPv4/TCP parsing (ported from parser/pcapreader.py) ----------
+
+  function parsePcapBuffer(buf){
+    const dv = new DataView(buf);
+    const magic = dv.getUint32(0, true);
+    let little = true, nanoseconds = false;
+    if (magic === 0xa1b2c3d4) { little = true; }
+    else if (magic === 0xd4c3b2a1) { little = false; }
+    else if (magic === 0xa1b23c4d) { little = true; nanoseconds = true; }
+    else if (magic === 0x4d3cb2a1) { little = false; nanoseconds = true; }
+    else throw new Error("Not a recognized pcap file (bad magic number). pcapng is not supported yet — re-save as classic pcap in Wireshark (File → Export Specified Packets → .pcap).");
+
+    const linktype = dv.getUint32(20, little);
+    if (linktype !== 1) throw new Error(`Unsupported link type (${linktype}) — only Ethernet captures are supported.`);
+
+    const packets = [];
+    let offset = 24;
+    while (offset + 16 <= buf.byteLength) {
+      const tsSec = dv.getUint32(offset, little);
+      const tsSub = dv.getUint32(offset + 4, little);
+      const inclLen = dv.getUint32(offset + 8, little);
+      offset += 16;
+      if (offset + inclLen > buf.byteLength) break;
+      const ts = tsSec + tsSub / (nanoseconds ? 1e9 : 1e6);
+      packets.push({ ts, data: new Uint8Array(buf, offset, inclLen) });
+      offset += inclLen;
+    }
+    return packets;
+  }
+
+  function ipToString(bytes, off){
+    return `${bytes[off]}.${bytes[off+1]}.${bytes[off+2]}.${bytes[off+3]}`;
+  }
+
+  // Shared Ethernet/IPv4/TCP framing, factored out once there were two
+  // protocols on top of it — mirrors parser/pcapreader.py's split between
+  // frame parsing and protocol matching.
+  function extractTcpPackets(packets){
+    const out = [];
+    for (const pkt of packets) {
+      const d = pkt.data;
+      if (d.length < 14) continue;
+      const ethertype = (d[12] << 8) | d[13];
+      if (ethertype !== 0x0800) continue; // IPv4 only
+
+      const ipOff = 14;
+      if (d.length < ipOff + 20) continue;
+      const ihl = (d[ipOff] & 0x0f) * 4;
+      const proto = d[ipOff + 9];
+      if (proto !== 6) continue; // TCP only
+
+      const src = ipToString(d, ipOff + 12);
+      const dst = ipToString(d, ipOff + 16);
+
+      const tcpOff = ipOff + ihl;
+      if (d.length < tcpOff + 20) continue;
+      const sport = (d[tcpOff] << 8) | d[tcpOff + 1];
+      const dport = (d[tcpOff + 2] << 8) | d[tcpOff + 3];
+      const dataOffset = ((d[tcpOff + 12] >> 4) & 0x0f) * 4;
+      const payloadOff = tcpOff + dataOffset;
+      if (payloadOff > d.length) continue;
+
+      out.push({ ts: pkt.ts, src, dst, sport, dport, payload: d.subarray(payloadOff) });
+    }
+    return out;
+  }
+
+  // ---------- Modbus/TCP parsing (ported from parser/modbus_parser.py) ----------
+
+  function extractModbusTransactions(tcpPackets){
+    // FIFO-per-TCP-connection matching, exactly like modbus_parser.py:
+    // keyed by (client_ip, client_port, server_ip) rather than the
+    // Modbus transaction ID, since real masters often never increment it.
+    const pending = new Map();
+    const rows = [];
+    let rowId = 0;
+
+    for (const pkt of tcpPackets) {
+      if (pkt.dport !== MODBUS_PORT && pkt.sport !== MODBUS_PORT) continue;
+      const payload = pkt.payload;
+      if (payload.length < 8) continue; // MBAP (7) + funcCode (1) minimum
+
+      const unitId = payload[6];
+      const funcCode = payload[7];
+
+      if (pkt.dport === MODBUS_PORT) {
+        // request
+        const connKey = `${pkt.src}:${pkt.sport}:${pkt.dst}`;
+        if (!pending.has(connKey)) pending.set(connKey, []);
+        pending.get(connKey).push({
+          rowId: rowId++, src: pkt.src, dst: pkt.dst, unitId, funcCode,
+          requestTs: pkt.ts, protocol: "modbus",
+        });
+      } else {
+        // response
+        const connKey = `${pkt.dst}:${pkt.dport}:${pkt.src}`;
+        const queue = pending.get(connKey);
+        if (!queue || queue.length === 0) continue;
+        const req = queue.shift();
+        const isException = funcCode >= 0x80;
+        rows.push({ ...req, responseTs: pkt.ts, isException });
+      }
+    }
+    // unmatched requests (no response in capture) still count toward session stats
+    for (const queue of pending.values()) {
+      for (const req of queue) rows.push({ ...req, responseTs: null, isException: false });
+    }
+    return rows;
+  }
+
+  // ---------- S7comm parsing (ported from parser/s7comm_parser.py) ----------
+  //
+  // TPKT (RFC 1006, 4-byte header) + COTP (ISO 8073, Data TPDU = 0xF0) + S7
+  // header (protocol id 0x32). Scoped to what session-level scoring needs
+  // (ROSCTR message type, function code, success/failure), same stated
+  // simplifications as the Python parser: no TCP reassembly, unit_id
+  // always 0 (rack/slot isn't parsed from the COTP handshake), and
+  // exception detection is only accurate for Write Var (0x05) responses —
+  // Read Var's per-item return codes aren't decoded.
+  function parseS7Header(payload){
+    if (payload.length < 6) return null;
+    if (payload[0] !== 0x03) return null; // TPKT version
+    const cotpLi = payload[4];
+    const s7Off = 5 + cotpLi;
+    if (payload.length < s7Off + 10) return null;
+    const cotpPduType = payload[5] & 0xf0;
+    if (cotpPduType !== 0xf0) return null; // Data TPDU only
+    if (payload[s7Off] !== 0x32) return null; // S7 protocol id
+
+    const rosctr = payload[s7Off + 1];
+    const paramLen = (payload[s7Off + 6] << 8) | payload[s7Off + 7];
+
+    if (rosctr === ROSCTR_ACK) {
+      return { rosctr, funcCode: null, isException: payload[s7Off + 10] !== 0 };
+    }
+
+    const paramOff = s7Off + 10;
+    if (payload.length <= paramOff) return { rosctr, funcCode: null, isException: false };
+    const funcCode = payload[paramOff];
+    let isException = false;
+    if (rosctr === ROSCTR_ACK_DATA && funcCode === 0x05 && paramLen >= 2 && payload.length > paramOff + 1) {
+      isException = payload[paramOff + 1] !== 0xff;
+    }
+    return { rosctr, funcCode, isException };
+  }
+
+  function extractS7CommTransactions(tcpPackets){
+    // Same FIFO-per-connection matching strategy as Modbus — a Job (request)
+    // is matched to the next Ack/Ack-Data/Userdata (response) seen on that
+    // TCP connection, not by any reference field.
+    const pending = new Map();
+    const rows = [];
+    let rowId = 0;
+
+    for (const pkt of tcpPackets) {
+      if (pkt.dport !== S7COMM_PORT && pkt.sport !== S7COMM_PORT) continue;
+      const hdr = parseS7Header(pkt.payload);
+      if (!hdr) continue;
+
+      if (pkt.dport === S7COMM_PORT && hdr.rosctr === ROSCTR_JOB) {
+        const connKey = `${pkt.src}:${pkt.sport}:${pkt.dst}`;
+        if (!pending.has(connKey)) pending.set(connKey, []);
+        pending.get(connKey).push({
+          rowId: rowId++, src: pkt.src, dst: pkt.dst, unitId: 0, funcCode: hdr.funcCode,
+          requestTs: pkt.ts, protocol: "s7comm",
+        });
+      } else if (pkt.sport === S7COMM_PORT &&
+                 (hdr.rosctr === ROSCTR_ACK || hdr.rosctr === ROSCTR_ACK_DATA || hdr.rosctr === ROSCTR_USERDATA)) {
+        const connKey = `${pkt.dst}:${pkt.dport}:${pkt.src}`;
+        const queue = pending.get(connKey);
+        if (!queue || queue.length === 0) continue;
+        const req = queue.shift();
+        rows.push({ ...req, responseTs: pkt.ts, isException: hdr.isException });
+      }
+    }
+    for (const queue of pending.values()) {
+      for (const req of queue) rows.push({ ...req, responseTs: null, isException: false });
+    }
+    return rows;
+  }
+
+  // ---------- session-level, population-relative scoring (ported from models/session_detector.py) ----------
+
+  // Math.max(...arr)/Math.min(...arr) spread every element as a function
+  // argument, which throws "Maximum call stack size exceeded" once an
+  // array gets much past ~100k elements — well within range for a busy
+  // PLC's session, or for a whole real capture (found by testing this
+  // page against a 50k-transaction real capture, which sits close enough
+  // to that cliff to make the risk worth fixing, not just noting).
+  function arrMin(arr){ let m = Infinity; for (const v of arr) if (v < m) m = v; return m; }
+  function arrMax(arr){ let m = -Infinity; for (const v of arr) if (v > m) m = v; return m; }
+
+  function buildSessionSummaries(rows){
+    const bySession = new Map();
+    for (const r of rows) {
+      const key = `${r.protocol}:${r.src}->${r.dst}:${r.unitId}`;
+      if (!bySession.has(key)) bySession.set(key, []);
+      bySession.get(key).push(r);
+    }
+
+    const summaries = [];
+    for (const [session, txs] of bySession) {
+      const n = txs.length;
+      const protocol = txs[0].protocol;
+      const times = txs.map(t => t.requestTs);
+      const duration = arrMax(times) - arrMin(times);
+      const requestRate = (n > 1 && duration > 1e-6) ? n / duration : null;
+      const exceptionCount = txs.filter(t => t.isException).length;
+      const exceptionRate = n ? exceptionCount / n : null;
+      const funcCodes = new Set(txs.map(t => t.funcCode));
+      const standardSet = STANDARD_FUNCTION_CODES[protocol] || STANDARD_FUNCTION_CODES.modbus;
+      const nonstandard = txs.filter(t => !standardSet.has(t.funcCode)).length;
+
+      summaries.push({
+        session, protocol, src: txs[0].src, dst: txs[0].dst,
+        nTransactions: n, durationS: duration,
+        requestRatePerS: requestRate, exceptionRate,
+        uniqueFunctionCodes: funcCodes.size,
+        nonstandardFunctionCodeRate: n ? nonstandard / n : 0,
+        transactions: txs,
+      });
+    }
+    return summaries;
+  }
+
+  function mean(arr){ return arr.reduce((a,b) => a+b, 0) / arr.length; }
+  function std(arr, m){ return Math.sqrt(arr.reduce((a,b) => a + (b-m)*(b-m), 0) / arr.length); }
+
+  function scoreSessions(summaries){
+    const metrics = ["requestRatePerS", "exceptionRate", "uniqueFunctionCodes", "nonstandardFunctionCodeRate"];
+    // Peer groups are (dst, protocol) pairs — a device speaking two
+    // protocols shouldn't have its Modbus traffic compared against its
+    // own S7comm traffic, since the two protocols' normal shapes (function
+    // code diversity, request rate) aren't comparable. Mirrors
+    // models/session_detector.py's groupby(["dst", "protocol"]).
+    const byDst = new Map();
+    summaries.forEach(s => {
+      const key = `${s.dst}::${s.protocol}`;
+      if (!byDst.has(key)) byDst.set(key, []);
+      byDst.get(key).push(s);
+    });
+
+    summaries.forEach(s => { s.zscores = {}; });
+
+    for (const [, group] of byDst) {
+      const protocol = group[0].protocol;
+      const sameProtocol = summaries.filter(s => s.protocol === protocol);
+      const peerPool = group.length >= 3 ? group : sameProtocol;
+      for (const metric of metrics) {
+        const vals = peerPool.map(s => s[metric]).filter(v => v !== null && !Number.isNaN(v));
+        const m = vals.length ? mean(vals) : 0;
+        const sd = vals.length ? std(vals, m) : 0;
+        for (const s of group) {
+          const v = s[metric];
+          s.zscores[metric] = (v === null || !sd || sd < 1e-9) ? 0 : (v - m) / sd;
+        }
+      }
+    }
+
+    summaries.forEach(s => {
+      const maxAbsZ = Math.max(...Object.values(s.zscores).map(z => Math.abs(z)));
+      s.maxAbsZscore = maxAbsZ;
+      s.flagged = maxAbsZ > Z_THRESHOLD;
+    });
+    return summaries;
+  }
+
+  function analyzeBuffer(buf){
+    const packets = parsePcapBuffer(buf);
+    const tcpPackets = extractTcpPackets(packets);
+    const rows = extractModbusTransactions(tcpPackets).concat(extractS7CommTransactions(tcpPackets));
+    if (rows.length === 0) {
+      throw new Error("No Modbus/TCP (port 502) or S7comm (port 102) traffic found in this capture.");
+    }
+    const summaries = scoreSessions(buildSessionSummaries(rows));
+    return summaries;
+  }
+
+  // ---------- UI ----------
+
+  const dropzone = document.getElementById("dropzone");
+  const fileInput = document.getElementById("file-input");
+  const statusEl = document.getElementById("status");
+  const errorEl = document.getElementById("error");
+  const resultsEl = document.getElementById("results");
+
+  ["dragenter", "dragover"].forEach(evt =>
+    dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add("drag"); }));
+  ["dragleave", "drop"].forEach(evt =>
+    dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+  dropzone.addEventListener("drop", e => {
+    const f = e.dataTransfer.files[0];
+    if (f) handleFile(f);
+  });
+  fileInput.addEventListener("change", e => {
+    if (e.target.files[0]) handleFile(e.target.files[0]);
+  });
+
+  function setStatus(msg, busy){
+    statusEl.hidden = !msg;
+    statusEl.innerHTML = msg ? (busy ? `<span class="spinner"></span> ${msg}` : msg) : "";
+  }
+  function setError(msg){
+    errorEl.hidden = !msg;
+    errorEl.innerHTML = msg ? `<div class="error-box">${msg}</div>` : "";
+  }
+
+  function handleFile(file){
+    setError(null);
+    resultsEl.hidden = true;
+    setStatus(`Parsing ${file.name} (${(file.size/1e6).toFixed(1)} MB)…`, true);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const summaries = analyzeBuffer(reader.result);
+        setStatus(`Parsed ${file.name} — ${summaries.reduce((a,s) => a + s.nTransactions, 0).toLocaleString()} transactions across ${summaries.length} sessions`, false);
+        renderResults(summaries, file.name);
+      } catch (err) {
+        setStatus(null);
+        setError(err.message || String(err));
+      }
+    };
+    reader.onerror = () => { setStatus(null); setError("Could not read that file."); };
+    reader.readAsArrayBuffer(file);
+  }
+
+  let currentSummaries = null;
+
+  function renderResults(summaries, label){
+    currentSummaries = summaries;
+    resultsEl.hidden = false;
+    document.getElementById("radar-title").textContent = `Session timeline — ${label}`;
+
+    const flagged = summaries.filter(s => s.flagged);
+    const totalTx = summaries.reduce((a,s) => a + s.nTransactions, 0);
+
+    document.getElementById("stats").innerHTML = [
+      { n: totalTx.toLocaleString(), l: "transactions", cls: "" },
+      { n: summaries.length, l: "sessions", cls: "" },
+      { n: flagged.length, l: "sessions flagged", cls: flagged.length ? "crit" : "ok" },
+    ].map(i => `<div class="stat ${i.cls}"><div class="n">${i.n}</div><div class="l">${i.l}</div></div>`).join("");
+
+    renderRadar(summaries);
+    renderTable(summaries);
+    document.getElementById("inspector").innerHTML =
+      '<h2>Session detail</h2><div class="empty-hint">Click a lane above, or a row below, to inspect that session’s stats.</div>';
+  }
+
+  function renderTable(summaries){
+    const sorted = [...summaries].sort((a,b) => b.maxAbsZscore - a.maxAbsZscore);
+    const rowsHtml = sorted.map(s => `
+      <tr class="${s.flagged ? 'flagged' : ''}" data-session="${s.session}">
+        <td class="${s.flagged ? 'verdict-flagged' : 'verdict-ok'}">${s.flagged ? 'FLAGGED' : 'normal'}</td>
+        <td>${s.protocol}</td>
+        <td>${s.session}</td>
+        <td>${s.nTransactions.toLocaleString()}</td>
+        <td>${s.requestRatePerS !== null ? s.requestRatePerS.toFixed(2) : '—'}</td>
+        <td>${s.exceptionRate !== null ? (s.exceptionRate*100).toFixed(0) + '%' : '—'}</td>
+        <td>${s.uniqueFunctionCodes}</td>
+        <td>${s.maxAbsZscore.toFixed(2)}</td>
+      </tr>`).join("");
+    document.getElementById("session-table").innerHTML = `
+      <thead><tr>
+        <th>Verdict</th><th>Protocol</th><th>Session</th><th>Txns</th><th>Req/s</th><th>Exception %</th><th>Func codes</th><th>Max |z|</th>
+      </tr></thead><tbody>${rowsHtml}</tbody>`;
+
+    document.querySelectorAll("#session-table tbody tr").forEach(tr => {
+      tr.style.cursor = "pointer";
+      tr.addEventListener("click", () => {
+        const s = currentSummaries.find(x => x.session === tr.dataset.session);
+        if (s) showDetail(s);
+      });
+    });
+  }
+
+  function showDetail(s){
+    document.getElementById("inspector").innerHTML = `
+      <h2>Session: ${s.session}</h2>
+      <div class="field"><span class="k">verdict</span><span class="v">${s.flagged ? '<span class="badge crit">FLAGGED — outlier vs. peers</span>' : '<span class="badge ok">normal</span>'}</span></div>
+      <div class="field"><span class="k">protocol</span><span class="v">${s.protocol}</span></div>
+      <div class="field"><span class="k">transactions</span><span class="v">${s.nTransactions.toLocaleString()}</span></div>
+      <div class="field"><span class="k">duration</span><span class="v">${s.durationS.toFixed(1)}s</span></div>
+      <div class="field"><span class="k">request rate</span><span class="v">${s.requestRatePerS !== null ? s.requestRatePerS.toFixed(2) + '/s' : '—'}</span></div>
+      <div class="field"><span class="k">exception rate</span><span class="v">${s.exceptionRate !== null ? (s.exceptionRate*100).toFixed(1) + '%' : '—'}</span></div>
+      <div class="field"><span class="k">unique function codes</span><span class="v">${s.uniqueFunctionCodes}</span></div>
+      <div class="field"><span class="k">non-standard function code rate</span><span class="v">${(s.nonstandardFunctionCodeRate*100).toFixed(1)}%</span></div>
+      <div class="field"><span class="k">max |z-score| vs. peers</span><span class="v">${s.maxAbsZscore.toFixed(2)}</span></div>
+    `;
+  }
+
+  function renderRadar(summaries){
+    const canvas = document.getElementById("radar");
+    const dpr = window.devicePixelRatio || 1;
+    const cssW = canvas.clientWidth || canvas.parentElement.clientWidth;
+    const cssH = 280;
+    canvas.width = cssW * dpr;
+    canvas.height = cssH * dpr;
+    canvas.style.height = cssH + "px";
+    const ctx = canvas.getContext("2d");
+    ctx.scale(dpr, dpr);
+
+    const style = getComputedStyle(document.documentElement);
+    const col = name => style.getPropertyValue(name).trim();
+    const COLORS = { fg: col('--fg'), faint: col('--fg-faint'), line: col('--line'), crit: col('--crit'), panel2: col('--panel-2') };
+
+    const padL = 170, padR = 16, padT = 10, padB = 24;
+    const plotW = cssW - padL - padR;
+    const plotH = cssH - padT - padB;
+
+    const allTimes = summaries.flatMap(s => s.transactions.map(t => t.requestTs));
+    const t0 = arrMin(allTimes);
+    const maxT = arrMax(allTimes) - t0 || 1;
+    const rows = summaries.slice(0, 14); // cap lanes for legibility
+    const laneH = plotH / Math.max(rows.length, 1);
+
+    function x(t){ return padL + (t / maxT) * plotW; }
+    function y(i){ return padT + i * laneH + laneH / 2; }
+
+    function draw(){
+      ctx.clearRect(0, 0, cssW, cssH);
+      rows.forEach((s, i) => {
+        const ly = padT + i * laneH;
+        ctx.fillStyle = i % 2 === 0 ? COLORS.panel2 : "transparent";
+        ctx.fillRect(padL, ly, plotW, laneH);
+        ctx.fillStyle = COLORS.faint;
+        ctx.font = "10px 'IBM Plex Mono', monospace";
+        ctx.textBaseline = "middle"; ctx.textAlign = "right";
+        const protoTag = s.protocol === "s7comm" ? "S7" : "MB";
+        const label = `[${protoTag}] ${s.dst}` + (s.flagged ? "  ⚠" : "");
+        ctx.fillText(label.length > 24 ? label.slice(0,24)+"…" : label, padL - 10, ly + laneH/2);
+      });
+
+      ctx.strokeStyle = COLORS.line; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(padL, padT+plotH); ctx.lineTo(padL+plotW, padT+plotH); ctx.stroke();
+
+      ctx.fillStyle = COLORS.faint; ctx.font = "9px 'IBM Plex Mono', monospace";
+      ctx.textAlign = "center"; ctx.textBaseline = "top";
+      for (let i=0;i<=5;i++){ const tv=(maxT/5)*i; ctx.fillText(Math.round(tv/60)+"m", x(tv), padT+plotH+6); }
+
+      rows.forEach((s, i) => {
+        const py = y(i);
+        const sampled = s.transactions.length > 600
+          ? s.transactions.filter((_,idx) => idx % Math.ceil(s.transactions.length/600) === 0)
+          : s.transactions;
+        sampled.forEach(t => {
+          const px = x(t.requestTs - t0);
+          ctx.beginPath(); ctx.arc(px, py, s.flagged ? 2.6 : 2, 0, Math.PI*2);
+          ctx.fillStyle = s.flagged ? COLORS.crit : COLORS.faint;
+          ctx.fill();
+        });
+        if (s.flagged){
+          ctx.strokeStyle = COLORS.crit; ctx.lineWidth = 1;
+          ctx.strokeRect(padL, padT+i*laneH+1, plotW, laneH-2);
+        }
+      });
+    }
+    draw();
+
+    canvas.onclick = evt => {
+      const rect = canvas.getBoundingClientRect();
+      const my = evt.clientY - rect.top;
+      const idx = Math.floor((my - padT) / laneH);
+      if (rows[idx]) showDetail(rows[idx]);
+    };
+
+    canvas._resizeHandler && window.removeEventListener("resize", canvas._resizeHandler);
+    canvas._resizeHandler = () => {
+      const w = canvas.parentElement.clientWidth;
+      if (Math.abs(w - cssW) > 4) renderRadar(summaries);
+    };
+    window.addEventListener("resize", canvas._resizeHandler);
+  }
+
+  // ---------- load the worked example on open ----------
+
+  function loadExample(){
+    setError(null);
+    setStatus("Loading example capture…", true);
+    fetch("real_demo_raw.json")
+      .then(r => { if (!r.ok) throw new Error("example data not found"); return r.json(); })
+      .then(data => {
+        // Pre-extracted transaction rows (see docs build script) so the
+        // worked example loads instantly without re-parsing a pcap client-side.
+        const rows = data.transactions.map(t => ({
+          rowId: t.id, src: t.src, dst: t.dst, unitId: t.unit, funcCode: t.func,
+          requestTs: t.t, isException: t.exc, protocol: t.protocol,
+        }));
+        const summaries = scoreSessions(buildSessionSummaries(rows));
+        const nModbus = rows.filter(r => r.protocol === "modbus").length;
+        const nS7 = rows.filter(r => r.protocol === "s7comm").length;
+        setStatus(`Example loaded — ${rows.length.toLocaleString()} real transactions (${nModbus.toLocaleString()} Modbus, ${nS7.toLocaleString()} S7comm) from a 4SICS security-conference capture, ${summaries.length} sessions`, false);
+        renderResults(summaries, "4SICS-GeekLounge-151022 (Modbus + S7comm, example)");
+      })
+      .catch(err => { setStatus(null); setError("Could not load the example data: " + err.message); });
+  }
+
+  document.getElementById("reload-example").addEventListener("click", loadExample);
+  loadExample();
+})();
+</script>
