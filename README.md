@@ -8,7 +8,7 @@ anomalies — instead of treating OT traffic as generic bytes-per-second
 time series. Works offline (pcap files, same protocols) and live (sniffs
 a SPAN/mirror port continuously — see "Live monitoring" below).
 
-**[Try it in your browser →](https://KhabibullaevMurodilla.github.io/docs/ot-anomaly-detector/)**
+**[Try it in your browser →](https://KhabibullaevMurodilla.github.io/ot-anomaly-detector/)**
 (live once Pages is enabled — see below) — drop in your own `.pcap` and
 get results instantly. No install, no upload: the entire parser and the
 population-relative session detector run as client-side JavaScript, so
